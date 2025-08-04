@@ -1,139 +1,144 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { URL } from '../assets/constants';
+import { v4 as uuidv4 } from 'uuid';
+import { getAllChats, saveChat, loadChat, askQuestionAPI } from './services';
+import type { ChatMessage } from './services';
 import Answer from './Answer';
 import History from './History';
+import Settings from './settings';
+import { Settings as SettingsIcon } from 'lucide-react';
 
-type HistoryItem = {
-  question: string;
-  answer: string;
-};
+
 
 export const Dashboard = () => {
   const [query, setQuery] = useState('');
-  const [recentHistory, setRecentHistory] = useState<HistoryItem[]>(() => {
-    const stored = localStorage.getItem('history');
-    return stored ? JSON.parse(stored) : [];
-  });
-
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sessionId, setSessionId] = useState('');
+  const [showSettings, setShowSettings] = useState(false); 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let chatSessionId = sessionStorage.getItem('chat_session_id');
+    if (!chatSessionId) {
+      chatSessionId = uuidv4();
+      sessionStorage.setItem('chat_session_id', chatSessionId);
+    }
+    setSessionId(chatSessionId);
+
+    const allChats = getAllChats();
+    const current = allChats.find(chat => chat.id === chatSessionId);
+    setMessages(current ? current.messages : []);
+  }, []);
 
   const askQuestion = async () => {
     if (!query.trim()) return;
-
-    const newEntry: HistoryItem = { question: query, answer: '' };
-    const updatedHistory = [...recentHistory, newEntry];
-    setRecentHistory(updatedHistory);
+    const finalMessages = await askQuestionAPI(query, messages, sessionId);
+    setMessages(finalMessages);
     setQuery('');
+  };
 
-    const payload = {
-      contents: [{ parts: [{ text: query }] }],
-    };
-
-    try {
-      const response = await fetch(URL, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-      let answer = '';
-
-      if (data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-        answer = data.candidates[0].content.parts[0].text;
-      } else {
-        answer = 'Something went wrong or no response found.';
-      }
-
-      const finalHistory = [...updatedHistory];
-      finalHistory[finalHistory.length - 1].answer = answer;
-      setRecentHistory(finalHistory);
-      localStorage.setItem('history', JSON.stringify(finalHistory));
-    } catch (err) {
-      console.error('Error fetching answer:', err);
-      const errorHistory = [...updatedHistory];
-      errorHistory[errorHistory.length - 1].answer = 'Error getting response.';
-      setRecentHistory(errorHistory);
-      localStorage.setItem('history', JSON.stringify(errorHistory));
+  const loadChatHandler = (chatId: string) => {
+    const chat = loadChat(chatId);
+    if (chat) {
+      setMessages(chat.messages);
+      sessionStorage.setItem('chat_session_id', chatId);
+      setSessionId(chatId);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      askQuestion();
-    }
+    if (e.key === 'Enter') askQuestion();
   };
 
-  const scrollToQuestion = (index: number) => {
-    const el = document.getElementById(`question-${index}`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
+  const clearChat = () => {
+    setMessages([]);
+  };
+
+  const clearHistory = () => {
+    localStorage.setItem('chat_sessions', JSON.stringify([]));
+    setMessages([]);
   };
 
   useEffect(() => {
     if (containerRef.current) {
-      containerRef.current.scrollTo({
-        top: containerRef.current.scrollHeight,
-        behavior: 'smooth',
-      });
+      containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' });
     }
-  }, [recentHistory]);
+  }, [messages]);
+
+  const sessions = getAllChats().map(session => ({ id: session.id, question: session.title, answer: '' }));
 
   return (
-    <div className="flex flex-row min-h-screen bg-black text-white">
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col p-6 overflow-y-auto" ref={containerRef}>
-        {recentHistory.map((entry, index) => (
-          <div key={index} className="mb-6 flex flex-col gap-2">
-            {/* User Question */}
-            <div className="flex justify-end">
-              <p
-                id={`question-${index}`}
-                className="inline-block bg-zinc-500 text-white p-3 rounded-xl font-medium shadow-sm max-w-[75%]"
-              >
-                {entry.question}
-              </p>
+    <div className="flex h-screen bg-white text-white">
+      <div className="flex-1 flex flex-col">
+        <div className="flex-1 overflow-y-auto p-4 pb-24 space-y-4 bg-black" ref={containerRef}>
+          {messages.map((msg, index) => (
+            <div key={index} id={`message-${index}`} className="space-y-3">
+              {msg.sender === 'user' ? (
+                <div className="flex justify-end">
+                  <div className="max-w-xs md:max-w-md lg:max-w-lg xl:max-w-xl bg-zinc-700 text-white p-3 rounded-2xl rounded-tr-sm shadow-lg">
+                    {msg.message}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex justify-start">
+                  <div className="max-w-xs md:max-w-md lg:max-w-lg xl:max-w-xl bg-gray-600 text-white p-4 rounded-2xl rounded-tl-sm shadow-lg whitespace-pre-wrap">
+                    {msg.message.split('\n').map((line, i) => (
+                      <Answer key={`${index}-${i}`} ans={line} index={i} />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
+          ))}
+        </div>
 
-            {/* Bot Answer */}
-            <div className="flex justify-start">
-              <div className="bg-zinc-500 text-white p-4 rounded-xl shadow-md max-w-[75%] text-left whitespace-pre-line">
-                {entry.answer ? (
-                  entry.answer.split('\n').map((line, i) => {
-                    const uniqueKey = `${index}-${i}-${line.slice(0, 10)}`;
-                    return <Answer key={uniqueKey} ans={line} index={i} />;
-                  })
-                ) : (
-                  <div>Loading...</div>
-                )}
-              </div>
-            </div>
+        <div className="absolute bottom-0 left-0 right-0 bg-black border-t border-gray-300 p-4">
+          <div className="max-w-4xl mx-auto flex gap-3">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask Me"
+              className="flex-1 bg-gray-600 text-white px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <button
+              onClick={askQuestion}
+              className="bg-zinc-600 hover:bg-zinc-900 text-white px-6 py-3 rounded-xl font-medium transition-colors duration-200"
+              disabled={!query.trim()}
+            >
+              Ask
+            </button>
+            <button
+              onClick={clearChat}
+              className="bg-zinc-600 hover:bg-red-600 text-white px-6 py-3 rounded-xl font-medium transition-colors duration-200"
+            >
+              Clear
+            </button>
+            <button onClick={() => setShowSettings(true)}  className="bg-zinc-600 hover:bg-zinc-800 text-white p-3 rounded-xl transition-colors duration-200 flex items-center justify-center" title="Settings">
+              
+  <SettingsIcon size={20} />
+</button>
+
           </div>
-        ))}
+        </div>
       </div>
 
-      {/* Ask Input */}
-      <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 flex gap-2">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask Me"
-          className="bg-zinc-900 text-white px-4 py-2 rounded w-80"
-        />
-        <button
-          onClick={askQuestion}
-          className="bg-zinc-700 hover:bg-zinc-600 text-white px-4 py-2 rounded"
-        >
-          Ask
-        </button>
+      <div className="w-64 bg-gray-900 border-l border-gray-700 overflow-y-auto">
+        <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+          <h2 className="text-lg font-semibold ml-2">History</h2>
+          <button
+            onClick={clearHistory}
+            className="text-sm text-white bg-red-600 hover:bg-red-800 px-2 py-1 rounded"
+            title="Clear History"
+          >
+            ✕
+          </button>
+        </div>
+        <History items={sessions} onSelect={(index) => loadChatHandler(sessions[index].id)} />
       </div>
 
-      {/* History Sidebar */}
-      <div className="w-64 bg-black border-l border-zinc-700 overflow-y-auto">
-        <History items={recentHistory} onSelect={scrollToQuestion} />
-      </div>
+      {/*  Settings */}
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
     </div>
   );
 };
